@@ -73,6 +73,9 @@ Enter:         A1 01 00 00 58 00 00 00 00 00
 
 #define MAX_ATTRIBUTE_VALUE_SIZE 300
 
+// Device connection status
+static uint8_t device_is_connected = 0;
+
 // SDP
 static uint8_t            hid_descriptor[MAX_ATTRIBUTE_VALUE_SIZE];
 static uint16_t           hid_descriptor_len;
@@ -93,14 +96,6 @@ static const char* remote_addr_string = "3D-0E-01-16-05-2E";
 static bd_addr_t remote_addr;
 
 static btstack_packet_callback_registration_t hci_event_callback_registration;
-
-// Simplified US Keyboard with Shift modifier
-
-#define CHAR_ILLEGAL     0xff
-#define CHAR_RETURN     '\n'
-#define CHAR_ESCAPE      27
-#define CHAR_TAB         '\t'
-#define CHAR_BACKSPACE   0x7f
 
 /**************************************************************************************************/
 
@@ -410,25 +405,34 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
     switch (packet_type) {
 		case HCI_EVENT_PACKET:
             event = hci_event_packet_get_type(packet);
-            switch (event) {            
+            printf("\n---Event received with code: 0x%02X---\n", event);
+            switch (event) {
                 /* @text When BTSTACK_EVENT_STATE with state HCI_STATE_WORKING
                  * is received and the example is started in client mode, the remote SDP HID query is started.
                  */
                 case BTSTACK_EVENT_STATE:
-                    if (btstack_event_state_get_state(packet) == HCI_STATE_WORKING){
+                    if (btstack_event_state_get_state(packet) == HCI_STATE_WORKING) {
                         debug("Start SDP HID query for remote HID Device.\n");
                         sdp_client_query_uuid16(&handle_sdp_client_query_result, remote_addr, BLUETOOTH_SERVICE_CLASS_HUMAN_INTERFACE_DEVICE_SERVICE);
                     }
                     break;
 
+                case HCI_EVENT_CONNECTION_COMPLETE:
+                    if(!device_is_connected)
+                        sdp_client_query_uuid16(&handle_sdp_client_query_result, remote_addr, BLUETOOTH_SERVICE_CLASS_HUMAN_INTERFACE_DEVICE_SERVICE);
+                    break;
+
                 case BTSTACK_EVENT_NR_CONNECTIONS_CHANGED:
                     if (packet[2])
+                    {
+                        device_is_connected = 1;
                         printf("Device connected.\n");
+                    }
                     else
                     {
+                        device_is_connected = 0;
                         printf("Device disconnected.\n");
-                        // Wait 10s and enable connections
-                        delay(30000);
+                        // Re-enable connection
                         sdp_client_query_uuid16(&handle_sdp_client_query_result, remote_addr, BLUETOOTH_SERVICE_CLASS_HUMAN_INTERFACE_DEVICE_SERVICE);
                     }
                     break;
@@ -449,27 +453,34 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 
                 /* LISTING_RESUME */
 
-                case L2CAP_EVENT_CHANNEL_OPENED: 
+                case L2CAP_EVENT_CHANNEL_OPENED:
                     status = packet[2];
                     if (status){
                         printf("L2CAP Connection failed: 0x%02x\n", status);
                         break;
                     }
                     l2cap_cid  = little_endian_read_16(packet, 13);
-                    if (!l2cap_cid) break;
+                    if (!l2cap_cid)
+                    {
+                        printf("No\n");
+                        break;
+                    }
                     if (l2cap_cid == l2cap_hid_control_cid){
                         status = l2cap_create_channel(packet_handler, remote_addr, hid_interrupt_psm, 48, &l2cap_hid_interrupt_cid);
                         if (status){
                             printf("Connecting to HID Control failed: 0x%02x\n", status);
                             break;
                         }
-                    }                        
+                        else
+                            printf("HID Control connected.\n");
+                    }
                     if (l2cap_cid == l2cap_hid_interrupt_cid){
                         printf("HID Connection established\n");
                     }
+                    else
+                        printf("HID Connection not established\n");
                     break;
                 default:
-                    printf("\n---Unhandle event received: %d---\n", event);
                     break;
             }
             break;
